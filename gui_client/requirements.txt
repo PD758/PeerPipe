@@ -1,0 +1,11 @@
+websockets
+aiortc
+orjson
+coloredlogs
+pyside6
+zstandard
+lz4
+psutil
+winloop; sys_platform == "win32"
+uvloop; sys_platform != "win32"
+gostcrypto
