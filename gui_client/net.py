@@ -137,6 +137,14 @@ class _UDPStreamReader(asyncio.StreamReader):
             return b''
         
         return data
+    
+    def read_nowait(self) -> bytes | None:
+        """Попытка прочитать пакет из очереди без блокировки. 
+        Нужно для жадного батчинга."""
+        try:
+            return self._queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return None
 
 class _UDPServerProtocol(asyncio.DatagramProtocol):
     def __init__(self, on_connection_cb: Callable[[_UDPStreamReader, _UDPStreamWriter], Awaitable[None]], loop: asyncio.AbstractEventLoop):
@@ -170,7 +178,7 @@ class _UDPServerProtocol(asyncio.DatagramProtocol):
             }
             self.sessions[addr] = session
             
-            self.loop.create_task(self.on_connection_cb(reader, writer))
+            self.loop.create_task(self.on_connection_cb(reader, writer)) # type: ignore
         
         session['last_seen'] = self.loop.time()
         session['reader'].feed_datagram(data)

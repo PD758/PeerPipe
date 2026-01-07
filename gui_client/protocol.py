@@ -272,7 +272,7 @@ class WebRTCInstance:
         elif channel.label.startswith(config.PROXY_CHANNEL_PREFIX):
             if channel.label in self.ev_waiting:
                 self.outcoming_channels[channel.label] = channel
-                self.ev_waiting[channel.label].set_result(2)
+                self.ev_waiting[channel.label].set_result(0)
         else:
             channel.close()
             logger.error("WebRTC: got unknown channel %s created by %s", channel.label, self.peer_name)
@@ -575,7 +575,8 @@ class WebRTCInstance:
                 first_recv = True
                 while not pipe_closed.is_set():
                     try:
-                        # Ждем новую датаграмму не дольше BATCH_TIMEOUT
+                        # 1. Ждем хотя бы один пакет (блокирующе)
+                        # Если буфер уже частично заполнен предыдущими остатками, можно уменьшить таймаут (опционально)
                         data = await asyncio.wait_for(reader.read(), timeout=BATCH_TIMEOUT)
                         
                         if offerer and first_recv:
@@ -586,12 +587,19 @@ class WebRTCInstance:
                         
                         #logger.debug("WebRTCI/UDP batcher: packed packet into frame. contents: %s", data)
                         
-                        # Добавляем framing: 4 байта длины (network byte order) + сама датаграмма
-                        buffer.extend(len(data).to_bytes(4, 'big'))
-                        buffer.extend(data)
+                        while True:
+                            # framing
+                            buffer.extend(len(data).to_bytes(4, 'big'))
+                            buffer.extend(data)
+                            
+                            if len(data) > BATCH_SIZE_LIMIT:
+                                break
+                            
+                            data = reader.read_nowait()
+                            if data is None:
+                                break
 
-                        # Если буфер переполнен, отправляем его немедленно
-                        if len(buffer) > BATCH_SIZE_LIMIT:
+                        if buffer:
                             channel.send(self._handle_raw_data(bytes(buffer), chid, False, False))
                             #logger.debug("WebRTCI/UDP batcher: sent frame: %d >LIM", len(buffer))
                             buffer.clear()
@@ -599,11 +607,10 @@ class WebRTCInstance:
                     except asyncio.TimeoutError:
                         # Тайм-аут сработал, значит новых датаграмм пока нет.
                         # Если в буфере что-то есть, отправляем.
-                        if offerer and first_recv:
-                            first_recv = False
-                            await sigstart_ev.wait()
-                        
                         if buffer:
+                            if offerer and first_recv:
+                                first_recv = False
+                                await sigstart_ev.wait()
                             channel.send(self._handle_raw_data(bytes(buffer), chid, False, False))
                             #logger.debug("WebRTCI/UDP batcher: sent frame %d: >TIME", len(buffer))
                             buffer.clear()
@@ -661,26 +668,38 @@ class WebRTCInstance:
                 
                 try:
                     
-                    # Декодируем framing
+                    view = memoryview(raw_batch)
                     offset = 0
-                    while offset < len(raw_batch):
-                        if offset + 4 > len(raw_batch):
+                    limit = len(view)
+                    pkts_processed = 0
+                    
+                    while offset < limit:
+                        if offset + 4 > limit:
                             logger.debug("WebRTCI: malformed UDP batch, insufficient length data")
                             break
+                    
                         
-                        length = int.from_bytes(raw_batch[offset:offset+4], 'big')
+                        length = int.from_bytes(view[offset:offset+4], 'big')
                         offset += 4
                         
-                        if offset + length > len(raw_batch):
+                        if offset + length > limit:
                             logger.debug("WebRTCI: malformed UDP batch, payload shorter than specified length")
                             break
-                        datagram = raw_batch[offset:offset+length]
+                        
+                        datagram = view[offset:offset+length]
                         #logger.debug("WebRTCI/UDP writer: unpacked and sending packet %s", datagram)
+                        
                         writer.write(datagram)
-                        await asyncio.sleep(0)
+                        
+                        offset += length
+                        pkts_processed += 1                        
                         #await writer.drain()
                         #logger.debug("WebRTCI/UDP unbatcher: sent packet %d", len(datagram))
-                        offset += length
+                        
+                        if pkts_processed % 16 == 0:
+                            await asyncio.sleep(0)
+                    if pkts_processed > 0:
+                        await asyncio.sleep(0)
                     #logger.debug("WebRTCI/UDP unbatcher: unbatch frame end")
                 except Exception as e:
                     logger.debug("WebRTCI/UDP writer: %s during UDP socket send", e)
@@ -711,7 +730,7 @@ class WebRTCInstance:
         chid = self._begin_proxy(port_info)
         try:
             res = await asyncio.wait_for(self.ev_waiting[chid], timeout=config.CHANNEL_CREATION_TIMEOUT)
-            if res == 2: # success
+            if res == 0: # success
                 pass
             elif res == 1: # rejected
                 writer.close()
@@ -909,6 +928,7 @@ class WebRTCInstance:
                 logger.debug("WebRTCI: failed to cleanup GOST %s", self._data_encp, exc_info=True)
             else:
                 logger.debug("WebRTCI: cleaned up GOST encp")
+    @typing.no_type_check
     def _init_enc(self, chid: str):
         if config.ENABLE_GOST_ENCRYPTION:
             enc_key = bytearray(gostcrypto.gosthash.new("streebog256", data=f"{self._neg_key}-{chid}".encode()).digest())
