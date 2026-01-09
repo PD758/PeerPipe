@@ -127,6 +127,22 @@ class AppLogic:
         self.gui_q({"type": "left_room"})
         await self.conn_server.send(orjson.dumps(message), as_text=True)
     
+    async def fast_room_exact(self, user_name: str, room_name: str, room_uuid: str):
+        if not self.conn_server or not self.conn_server.is_alive:
+            logger.warning("AL: fastroomexact called in closed WSS")
+            raise EOFError
+        if not isinstance(self.serverState, ConnectedServerState):
+            logger.warning("AL: fastroomexact called with invalid state")
+            raise EOFError
+        message = {
+            "type": "FAST_ROOM_EXACT",
+            "user_name": user_name,
+            "room_name": room_name,
+            "room_uuid": room_uuid
+        }
+        self.update_state(JoiningRoomServerState(user_name=user_name, room_name=room_name, room_uuid=room_uuid))
+        await self.conn_server.send(orjson.dumps(message), as_text=True)
+    
     async def send_sdp_state(self, target_user: str, sdp_type: str, sdp_data):
         if not self.conn_server or not self.conn_server.is_alive:
             logger.warning("AL: send sdp called in closed WSS")
@@ -193,7 +209,7 @@ class AppLogic:
                 case 'SUCCESS':
                     continue
                 case 'ROOM_CREATED':
-                    if not isinstance(self.serverState, CreatingRoomServerState):
+                    if not isinstance(self.serverState, (CreatingRoomServerState, JoiningRoomServerState)):
                         logger.error("AL: state handling failed: got ROOM_CREATING while state is %s", self.serverState)
                         continue
                     rm_uuid = data.get("room_uuid", None)
@@ -208,7 +224,7 @@ class AppLogic:
                     self.gui_q({"type": "update_data", "upd": "roomname", "new": newstate.room_name})
                     continue
                 case 'ROOM_JOINED':
-                    if not isinstance(self.serverState, JoiningRoomServerState):
+                    if not isinstance(self.serverState, (CreatingRoomServerState, JoiningRoomServerState)):
                         logger.error("AL: state handling failed: got ROOM_JOINED while state is %s", self.serverState)
                         continue
                     room_membs = data.get("room_members", None)

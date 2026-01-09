@@ -4,7 +4,6 @@ SERVER_URI: str = "wss://127.0.0.1:46466/ws"
 DEBUG_SERVER_DISABLE_SSL: bool = True
 
 FORCE_THEME: Optional[Literal["dark", "bright"]] = "bright"
-# please note that 
 FORCE_STYLE: Optional[Literal["fusion", "windows", "windowsvista"]] = None #"windowsvista"
 
 ENABLE_GOST_ENCRYPTION: bool = False

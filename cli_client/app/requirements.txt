@@ -1,0 +1,9 @@
+websockets
+aiortc
+orjson
+zstandard
+lz4
+psutil
+uvloop
+gostcrypto
+watchdog

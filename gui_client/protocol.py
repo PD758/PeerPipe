@@ -870,7 +870,6 @@ class WebRTCInstance:
     def _handle_raw_data(self, data: bytes, uuid, is_SSEQ: bool, is_EOT: bool):
         if is_SSEQ and is_EOT:
             logger.error("WebRTCI: invalid handler config")
-            # TODO: compression
         compressed = False
         _l = len(data)
         if self.config.Compression == 'lz4' and _l > 200:
