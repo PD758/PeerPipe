@@ -14,7 +14,7 @@ SESSION_TIMEOUT = 30.0
 
 # ======================= PORT UTILS =======================================================
 
-CACHE_TTL = 0.4
+CACHE_TTL = 0.2
 
 _last_cache_time: float = 0.0
 _cached_tcp_ports: set[int] = set()
@@ -45,33 +45,20 @@ def _update_cache_if_needed():
             _cached_udp_ports = new_udp_ports
             _last_cache_time = now
         except psutil.AccessDenied as e:
-            logger.critical("Похоже, что программа запущена в операционной системе семейства *NIX. Для корректной работы требуется запустить программу от имени администратора (sudo)", exc_info=True)
+            logger.critical("Похоже, что программа запущена в операционной системе семейства *NIX."
+                            "Для корректной работы требуется запустить программу от имени администратора (sudo)", exc_info=True)
         except psutil.Error as e:
             logger.error("Could not refresh port cache", exc_info=True)
 
 
 def is_tcp_port_free(port: int) -> bool:
     _update_cache_if_needed()
-    if port in _cached_tcp_ports:
-        return False
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind(('0.0.0.0', port))
-            return True
-    except:
-        return False
+    return port not in _cached_tcp_ports
+
 
 def is_udp_port_free(port: int) -> bool:
     _update_cache_if_needed()
-    if port in _cached_udp_ports:
-        return False
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.bind(('0.0.0.0', port))
-            return True
-    except:
-        return False
-        
+    return port not in _cached_udp_ports
 
 def calc_ip(n):
     '''calc_ip(5) -> "127.0.1.6"'''

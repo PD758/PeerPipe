@@ -50,6 +50,7 @@ class AppLogic:
         self.taskMan = protocol.TaskManager()
         self.serverState: ServerState = NoneServerState()
         self.negCfg: protocol.ConnectionConfig = protocol.ConnectionConfig() # type: ignore
+        self.banlist: set[str] = set()
     
     async def exit_watchdog(self):
         logger.debug("AL: watchdog online")
@@ -182,7 +183,7 @@ class AppLogic:
             try:
                 js = orjson.loads(raw)
             except orjson.JSONDecodeError:
-                logger.debug("AL: got invalid data from WSS: %s, skipping", raw)
+                logger.debug("AL: got invalid data from WSS (%s), skipping", repr(raw))
                 continue
             if not isinstance(js, dict) or 'type' not in js:
                 logger.debug("AL: invalid data format got from WSS, skipping")
@@ -224,7 +225,7 @@ class AppLogic:
                     self.gui_q({"type": "update_data", "upd": "roomname", "new": newstate.room_name})
                     continue
                 case 'ROOM_JOINED':
-                    if not isinstance(self.serverState, (CreatingRoomServerState, JoiningRoomServerState)):
+                    if not isinstance(self.serverState, JoiningRoomServerState):
                         logger.error("AL: state handling failed: got ROOM_JOINED while state is %s", self.serverState)
                         continue
                     room_membs = data.get("room_members", None)
@@ -309,6 +310,8 @@ class AppLogic:
         raise EOFError()
     
     def _find_free_ip(self) -> str:
+        if config.SERVER_MODE:
+            return '0.0.0.0'
         n = 0
         s = net.calc_ip(n)
         while any(s == conn.config.ShareIP for conn in self.conn_p2ps.values()):
@@ -375,6 +378,9 @@ class AppLogic:
             logger.error("IL: tried to update p2p while not in room")
             return
         if exact is not None:
+            if exact in self.banlist:
+                logging.debug("IL: tried to update p2p with banlisted peer")
+                return
             if exact in self.serverState.room_members:
                 # member joined
                 if exact in self.conn_p2ps:
@@ -392,12 +398,12 @@ class AppLogic:
             return
         else:
             for conn in self.conn_p2ps.values():
-                if conn.peer_name not in self.serverState.room_members:
+                if conn.peer_name not in self.serverState.room_members or conn.peer_name in self.banlist:
                     conn.terminate(do_notify=True)
                 else:
                     pass
             for member in self.serverState.room_members:
-                if member not in self.conn_p2ps:
+                if member not in self.conn_p2ps and member not in self.banlist:
                     self.conn_p2ps[member] = protocol.WebRTCInstance(self._p2p_query, member,
                                                             self.serverState.user_name, self.get_config())
                     self.taskMan.add_task(asyncio.create_task(self.conn_p2ps[member].begin()))
@@ -507,3 +513,12 @@ class AppLogic:
 
     def shutdown(self):
         self.should_exit.set()
+
+    def determine_interlocutor(self, dst_port: int, src_port: int, protocol: typing.Literal["TCP", "UDP"]) -> str:
+        #logger.debug("AL: looking for %s %s %s", dst_port, src_port, protocol)
+        for client in self.conn_p2ps.values():
+            for v in client.connections.values():
+                #logger.debug("AL: checking %s", v)
+                if (str(dst_port) in str(v) or str(src_port) in str(v)) and v[0].endswith(protocol):
+                    return client.peer_name
+        return ""

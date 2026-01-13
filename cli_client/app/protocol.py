@@ -149,6 +149,7 @@ class WebRTCInstance:
         self._event_callback = event_callback
         self.closed = False
         self._ctrl_initialized = False
+        self.connections: dict[str, tuple[str, int]] = {} # {uuid: ("self:proto", other), ...}
         
         self.listen_servers: dict[str, asyncio.Server|net._UDPServer] = {} # "PORT:PROTO": Server
         self.outcoming_channels: dict[str, RTCDataChannel] = {} # "proxy-UUID": RTCDC
@@ -291,6 +292,17 @@ class WebRTCInstance:
                 server.close_clients()
             server.close()
             self._queue(('stop_listen', port))
+        if do_notify:
+            self._queue(('exit',))
+        self.closed = True
+    async def aterminate(self, do_notify: bool = True):
+        for port, server in self.listen_servers.items():
+            if isinstance(server, asyncio.Server):
+                server.close_clients()
+            server.close()
+            self._queue(('stop_listen', port))
+        if hasattr(self, 'conn'):
+            await self.conn.close()
         if do_notify:
             self._queue(('exit',))
         self.closed = True
@@ -747,7 +759,7 @@ class WebRTCInstance:
             self._send_timed_out(chid)
             writer.close()
             return
-        
+        self.connections[chid] = (f"{local_addr[1]}:{port_info[1]}", port_info[0])
         if config.ENABLE_GOST_ENCRYPTION:
             self._init_enc(chid)
         logger.debug("WebRTCI: piping %s", port_info) # ############################
@@ -794,15 +806,21 @@ class WebRTCInstance:
             self.incoming_channels[channel_name].on("open", on_open)
     
     async def _start_proxy(self, chid: str, port: int, protocol: typing.Literal["TCP", "UDP"]):
-        logger.debug("WebRTCI: starting remote connection to %d:%s", port, protocol)
+        try:
+            host_i = config.SET_SHARE_PORTS.index(f"{port}:{protocol}")
+            host = config.SET_TO_HOSTS[host_i]
+        except:
+            host = '127.0.0.1'
+        logger.debug("WebRTCI: starting remote connection to %s:%d/%s", host, port, protocol)
         if protocol == 'TCP':
             reader, writer = await \
-                asyncio.open_connection(host='127.0.0.1', port=port)
+                asyncio.open_connection(host=host, port=port)
         else:
             reader, writer = await \
-                net.create_udp_connection(host='127.0.0.1', port=port)
+                net.create_udp_connection(host=host, port=port)
         if config.ENABLE_GOST_ENCRYPTION:
             self._init_enc(chid)
+        self.connections[chid] = (f"SELF:{protocol}", port)
         await self._do_pipe(chid=chid, channel=self.incoming_channels[chid],
                             reader=reader, writer=writer, offerer=False, protocol=protocol)
             
@@ -928,6 +946,13 @@ class WebRTCInstance:
                 logger.debug("WebRTCI: failed to cleanup GOST %s", self._data_encp, exc_info=True)
             else:
                 logger.debug("WebRTCI: cleaned up GOST encp")
+        TaskManager().add_task(
+            asyncio.create_task(self._delayed_after_close(chid))
+        )
+    async def _delayed_after_close(self, chid: str):
+        await asyncio.sleep(1)
+        if chid in self.connections:
+            del self.connections[chid]
     @typing.no_type_check
     def _init_enc(self, chid: str):
         if config.ENABLE_GOST_ENCRYPTION:

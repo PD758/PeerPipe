@@ -9,3 +9,25 @@ services:
       - NET_ADMIN
       - NET_RAW
       - SYS_NICE
+      - SYS_PTRACE
+      - DAC_READ_SEARCH
+    networks:
+      http-server-network:
+        aliases:
+          - pp.local
+      outbound-network:
+  web-server:
+    image: python:3.13-slim
+    command: python -m http.server 20000
+    ports:
+      - "20000:20000"
+    networks:
+      http-server-network:
+        aliases:
+          - http-server.local
+networks:
+  http-server-network:
+    driver: bridge
+    internal: true
+  outbound-network:
+    driver: bridge

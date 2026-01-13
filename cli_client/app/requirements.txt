@@ -7,3 +7,4 @@ psutil
 uvloop
 gostcrypto
 watchdog
+aiohttp
