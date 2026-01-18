@@ -250,6 +250,10 @@ class WebRTCInstance:
                 asyncio.create_task(self._ctrl_msg(message=message))
             )
         
+        @self._control_channel.on("close")
+        def _on_close():
+            self.terminate()
+        
         offer = await self.conn.createOffer()
         await self.conn.setLocalDescription(offer)
         self._queue(('send', make_body(
